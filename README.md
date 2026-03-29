@@ -1,2 +1,11 @@
-# hand-tracking-3d-particles
-Real-time 3D Particle System controlled by hand gestures using MediaPipe AI &amp; Three.js. Features 15,000 particles morphing into Sphere, Heart, Flower, Saturn &amp; Fireworks shapes.
+## 🚀 How to Run
+1. Download `heart.html`
+2. Open in any browser
+3. Allow camera access
+4. Move your hand! ✋
+
+## 🛠️ Tech Stack
+- Three.js (3D rendering)
+- MediaPipe Hands (AI hand tracking)
+- JavaScript
+- WebGL
