@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive 3D Particle System</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        canvas { display: block; }
+        #videoElement { display: none; } /* Hide the raw video feed */
+        
+        #ui-container {
+            position: absolute; top: 20px; left: 20px; color: white;
+            background: rgba(0, 0, 0, 0.6); padding: 20px;
+            border-radius: 10px; border: 1px solid #333;
+            pointer-events: none; max-width: 300px;
+        }
+        h1 { margin: 0 0 10px 0; font-size: 20px; color: #00ffcc; }
+        p { margin: 5px 0; font-size: 14px; line-height: 1.4; color: #ccc; }
+        .highlight { color: #fff; font-weight: bold; }
+        
+        #loading {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            color: white; font-size: 24px; font-weight: bold; background: rgba(0,0,0,0.8);
+            padding: 20px 40px; border-radius: 10px; border: 2px solid #00ffcc;
+        }
+    </style>
+
+    <!-- Three.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- MediaPipe Hands -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+    <div id="loading">Loading Camera & AI Models... Please Wait</div>
+    
+    <div id="ui-container">
+        <h1>Hand Tracking Particles</h1>
+        <p>✋ <span class="highlight">Move hand</span> to rotate.</p>
+        <p>🤏 <span class="highlight">Spread fingers</span> to expand particles.</p>
+        <p>🤌 <span class="highlight">Pinch fingers</span> to change shape & colors.</p>
+        <p id="current-shape" style="margin-top:15px; font-size: 16px; color:#ff00ff;">Shape: Sphere</p>
+    </div>
+
+    <video id="videoElement" autoplay playsinline></video>
+
+    <script>
+        // --- 1. THREE.JS SETUP ---
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.z = 10;
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // --- 2. PARTICLE TEMPLATES (MATH) ---
+        const PARTICLE_COUNT = 15000;
+        const shapes = [];
+        const shapeNames =["Sphere", "Heart", "Flower", "Saturn", "Fireworks"];
+        let currentShapeIndex = 0;
+
+        // Helper to create position arrays
+        function createShapeTemplate(generatorFunc) {
+            const positions = new Float32Array(PARTICLE_COUNT * 3);
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                const vec = generatorFunc(i);
+                positions[i * 3] = vec.x;
+                positions[i * 3 + 1] = vec.y;
+                positions[i * 3 + 2] = vec.z;
+            }
+            return positions;
+        }
+
+        // 0. Sphere
+        shapes.push(createShapeTemplate(() => {
+            const phi = Math.acos(-1 + (2 * Math.random()));
+            const theta = Math.sqrt(PARTICLE_COUNT * Math.PI) * phi;
+            const r = 4;
+            return new THREE.Vector3(r * Math.cos(theta) * Math.sin(phi), r * Math.sin(theta) * Math.sin(phi), r * Math.cos(phi));
+        }));
+
+        // 1. Heart
+        shapes.push(createShapeTemplate(() => {
+            const t = Math.random() * Math.PI * 2;
+            const x = 16 * Math.pow(Math.sin(t), 3);
+            const y = 13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t);
+            const scale = 0.25;
+            const scatter = 0.8;
+            return new THREE.Vector3(
+                (x * scale) + (Math.random() - 0.5) * scatter,
+                (y * scale) + (Math.random() - 0.5) * scatter,
+                (Math.random() - 0.5) * 2.0
+            );
+        }));
+
+        // 2. Flower (5 Petals)
+        shapes.push(createShapeTemplate(() => {
+            const t = Math.random() * Math.PI * 2;
+            const r = 5 * Math.sin(5 * t) * Math.random(); 
+            return new THREE.Vector3(
+                r * Math.cos(t),
+                r * Math.sin(t),
+                (Math.random() - 0.5) * 1.5
+            );
+        }));
+
+        // 3. Saturn
+        shapes.push(createShapeTemplate((i) => {
+            if (i < PARTICLE_COUNT * 0.6) { // Planet
+                const r = 2.5 * Math.cbrt(Math.random());
+                const u = Math.random(), v = Math.random();
+                const theta = u * 2.0 * Math.PI;
+                const phi = Math.acos(2.0 * v - 1.0);
+                return new THREE.Vector3(r * Math.sin(phi) * Math.cos(theta), r * Math.sin(phi) * Math.sin(theta), r * Math.cos(phi));
+            } else { // Rings
+                const r = 3.5 + Math.random() * 2.5; 
+                const theta = Math.random() * Math.PI * 2;
+                return new THREE.Vector3(r * Math.cos(theta), (Math.random() - 0.5) * 0.3, r * Math.sin(theta));
+            }
+        }));
+
+        // 4. Fireworks
+        shapes.push(createShapeTemplate((i) => {
+            const centers =[
+                new THREE.Vector3(0, 3, 0), new THREE.Vector3(-4, 2, 0),
+                new THREE.Vector3(4, 2, 0), new THREE.Vector3(-2, -3, 0), new THREE.Vector3(2, -3, 0)
+            ];
+            const center = centers[i % 5];
+            const r = Math.random() * 2;
+            const theta = Math.random() * Math.PI * 2;
+            const phi = Math.acos(-1 + (2 * Math.random()));
+            return new THREE.Vector3(
+                center.x + r * Math.sin(phi) * Math.cos(theta),
+                center.y + r * Math.sin(phi) * Math.sin(theta),
+                center.z + r * Math.cos(phi)
+            );
+        }));
+
+        // --- 3. PARTICLE SYSTEM INITIALIZATION ---
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(shapes[0]), 3));
+        
+        // Setup initial colors
+        const colors = new Float32Array(PARTICLE_COUNT * 3);
+        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+        const material = new THREE.PointsMaterial({
+            size: 0.05,
+            vertexColors: true,
+            transparent: true,
+            opacity: 0.8,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false
+        });
+
+        const particleSystem = new THREE.Points(geometry, material);
+        scene.add(particleSystem);
+
+        // Color Palettes
+        const palettes = [[0x00ffff, 0xff00ff, 0x0000ff], // Synthwave[0xff0000, 0xff7f00, 0xffff00], // Fire[0x00ff00, 0x00fa9a, 0x2e8b57], // Nature
+            [0xff69b4, 0xff1493, 0xffc0cb], // Blossom
+            [0xffffff, 0xaaaaaa, 0x555555], // Monochrome
+        ];
+
+        function randomizeColors() {
+            const palette = palettes[Math.floor(Math.random() * palettes.length)];
+            const colorAttr = geometry.attributes.color.array;
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                const color = new THREE.Color(palette[Math.floor(Math.random() * palette.length)]);
+                colorAttr[i * 3] = color.r;
+                colorAttr[i * 3 + 1] = color.g;
+                colorAttr[i * 3 + 2] = color.b;
+            }
+            geometry.attributes.color.needsUpdate = true;
+        }
+        randomizeColors();
+
+        // --- 4. ANIMATION & GESTURE LOGIC ---
+        let targetExpansion = 1.0;
+        let currentExpansion = 1.0;
+        let targetRotation = { x: 0, y: 0 };
+        
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Smoothly interpolate expansion
+            currentExpansion += (targetExpansion - currentExpansion) * 0.1;
+            
+            // Smoothly interpolate rotation
+            particleSystem.rotation.x += (targetRotation.x - particleSystem.rotation.x) * 0.05;
+            particleSystem.rotation.y += (targetRotation.y - particleSystem.rotation.y) * 0.05;
+
+            // Morphing particles towards the target shape and scaling by expansion
+            const positions = geometry.attributes.position.array;
+            const targetShape = shapes[currentShapeIndex];
+
+            for (let i = 0; i < PARTICLE_COUNT * 3; i++) {
+                // Lerp current position to (target shape position * expansion multiplier)
+                const targetPos = targetShape[i] * currentExpansion;
+                positions[i] += (targetPos - positions[i]) * 0.05;
+            }
+
+            geometry.attributes.position.needsUpdate = true;
+            
+            // Slowly rotate the whole system over time for ambient movement
+            particleSystem.rotation.y += 0.002;
+
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // --- 5. MEDIAPIPE HAND TRACKING ---
+        const videoElement = document.getElementById('videoElement');
+        let isPinched = false;
+
+        function onResults(results) {
+            // Hide loading screen on first successful frame
+            const loader = document.getElementById('loading');
+            if (loader) loader.style.display = 'none';
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const landmarks = results.multiHandLandmarks[0];
+                
+                // Track Thumb (4) and Index Finger (8) tips
+                const thumbTip = landmarks[4];
+                const indexTip = landmarks[8];
+                const handCenter = landmarks[9]; // Base of middle finger
+
+                // Map Hand Center to Rotation (Mirror X axis)
+                targetRotation.x = (handCenter.y - 0.5) * Math.PI;
+                targetRotation.y = -(handCenter.x - 0.5) * Math.PI;
+
+                // Calculate distance between thumb and index for Pinch/Spread
+                const dx = thumbTip.x - indexTip.x;
+                const dy = thumbTip.y - indexTip.y;
+                const dz = thumbTip.z - indexTip.z;
+                const distance = Math.sqrt(dx*dx + dy*dy + dz*dz);
+
+                // Map spread distance to particle expansion factor
+                targetExpansion = THREE.MathUtils.clamp(distance * 10, 0.5, 4.0);
+
+                // Detect Pinch to trigger shape switch
+                if (distance < 0.05 && !isPinched) {
+                    isPinched = true;
+                    // Switch Shape
+                    currentShapeIndex = (currentShapeIndex + 1) % shapes.length;
+                    document.getElementById('current-shape').innerText = `Shape: ${shapeNames[currentShapeIndex]}`;
+                    
+                    // Switch Colors
+                    randomizeColors();
+                } else if (distance > 0.08) {
+                    isPinched = false; // Reset pinch toggle when fingers spread
+                }
+            } else {
+                // Return to default state if hand is lost
+                targetExpansion = 1.0;
+                targetRotation.x = 0;
+                targetRotation.y = 0;
+            }
+        }
+
+        const hands = new Hands({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+        });
+        hands.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+        hands.onResults(onResults);
+
+        const cameraFeed = new Camera(videoElement, {
+            onFrame: async () => {
+                await hands.send({ image: videoElement });
+            },
+            width: 640,
+            height: 480
+        });
+        cameraFeed.start();
+    </script>
+</body>
+</html>
